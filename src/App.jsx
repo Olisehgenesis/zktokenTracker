@@ -27,8 +27,8 @@ const ERC20_ABI = [
 ];
 
 const INITIAL_TOKENS = [
-  { address: '0x000000000000000000000000000000000000800A', symbol: 'ETH' },
-  { address: '0xF0067Dc3590b82ffBF6ADC156CD077dcCa9dD604', symbol: 'LLT' },
+  { address: '0x000000000000000000000000000000000000800A', symbol: 'ETH', decimals: 18 },
+  { address: '0xF0067Dc3590b82ffBF6ADC156CD077dcCa9dD604', symbol: 'LLT', decimals: 18 },
 ];
 
 function App() {
@@ -46,12 +46,14 @@ function App() {
   useEffect(() => {
     initializeWeb3();
   }, []);
+
   useEffect(() => {
     if (account) {
       setWalletToCheck(account);
       refreshBalances(account);
     }
   }, [account]);
+
   const initializeWeb3 = async () => {
     try {
       const web3Instance = new Web3("https://rpc.sepolia.org");
@@ -82,23 +84,54 @@ function App() {
   };
 
   const addToken = async () => {
+    if (!web3) {
+      setError('Web3 is not initialized. Please wait or refresh the page.');
+      return;
+    }
     if (!web3.utils.isAddress(newTokenAddress)) {
       setError('Invalid token address');
       return;
     }
+    setLoading(true);
     try {
       const contract = new zksync.L2.eth.Contract(ERC20_ABI, newTokenAddress);
       const symbol = await contract.methods.symbol().call();
-      setTokens(prev => [...prev, { address: newTokenAddress, symbol }]);
+      const decimals = await contract.methods.decimals().call();
+      const newToken = { address: newTokenAddress, symbol, decimals: parseInt(decimals) };
+      
+      // Add the new token to the list
+      setTokens(prev => [...prev, newToken]);
+      
+      // Fetch the balance for the new token
+      const addressToCheck = walletToCheck || account;
+      if (addressToCheck) {
+        const balance = await contract.methods.balanceOf(addressToCheck).call();
+        const formattedBalance = formatBalance(balance, newToken.decimals);
+        
+        // Update the balances state with the new token's balance
+        setBalances(prev => ({
+          ...prev,
+          [newTokenAddress]: formattedBalance
+        }));
+      } else {
+        setError('Please connect a wallet or enter an address to check balances.');
+      }
+
       setNewTokenAddress('');
-      setSuccess('Token added successfully!');
+      setSuccess('Token added successfully and balance updated!');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
       setError('Error adding token: ' + err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
   const refreshBalances = async (addressToCheck) => {
+    if (!web3) {
+      setError('Web3 is not initialized. Please wait or refresh the page.');
+      return;
+    }
     if (!addressToCheck) {
       setError('Please enter a wallet address to check');
       return;
@@ -112,17 +145,18 @@ function App() {
     try {
       const newBalances = {};
       for (let token of tokens) {
-        if (token.address === '0x000000000000000000000000000000000000800A') {
-          const balance = await zksync.L2.getBalance(addressToCheck);
-          newBalances[token.address] = Web3.utils.fromWei(balance, 'ether');
-        } else {
-          const contract = new zksync.L2.eth.Contract(ERC20_ABI, token.address);
-          const balance = await contract.methods.balanceOf(addressToCheck).call();
-          const decimals = await contract.methods.decimals().call();
-          // Convert balance to a string before using fromWei
-          const adjustedBalance = Web3.utils.fromWei(balance.toString(), 'ether');
-          // Format the balance to a fixed number of decimal places
-          newBalances[token.address] = parseFloat(adjustedBalance).toFixed(6);
+        try {
+          if (token.address === '0x000000000000000000000000000000000000800A') {
+            const balance = await zksync.L2.getBalance(addressToCheck);
+            newBalances[token.address] = formatBalance(balance, token.decimals);
+          } else {
+            const contract = new zksync.L2.eth.Contract(ERC20_ABI, token.address);
+            const balance = await contract.methods.balanceOf(addressToCheck).call();
+            newBalances[token.address] = formatBalance(balance, token.decimals);
+          }
+        } catch (err) {
+          console.error(`Error fetching balance for ${token.symbol}:`, err);
+          newBalances[token.address] = 'Error';
         }
       }
       setBalances(newBalances);
@@ -133,6 +167,12 @@ function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const formatBalance = (balance, decimals) => {
+    const divisor = 10 ** decimals;
+    const formattedBalance = (parseFloat(balance) / divisor).toFixed(decimals);
+    return parseFloat(formattedBalance).toString(); // Remove trailing zeros
   };
 
   return (
@@ -174,9 +214,10 @@ function App() {
             <div className="sm:col-span-2">
               <button
                 onClick={() => refreshBalances(walletToCheck)}
-                className="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                disabled={loading}
+                className="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
               >
-                Check Balances
+                {loading ? 'Checking...' : 'Check Balances'}
               </button>
             </div>
           </div>
@@ -200,9 +241,10 @@ function App() {
             <div className="sm:col-span-2">
               <button
                 onClick={addToken}
-                className="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                disabled={loading}
+                className="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50"
               >
-                Add Token
+                {loading ? 'Adding...' : 'Add Token'}
               </button>
             </div>
           </div>
