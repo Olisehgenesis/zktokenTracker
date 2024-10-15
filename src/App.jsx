@@ -46,7 +46,12 @@ function App() {
   useEffect(() => {
     initializeWeb3();
   }, []);
-
+  useEffect(() => {
+    if (account) {
+      setWalletToCheck(account);
+      refreshBalances(account);
+    }
+  }, [account]);
   const initializeWeb3 = async () => {
     try {
       const web3Instance = new Web3("https://rpc.sepolia.org");
